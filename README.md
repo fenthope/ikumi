@@ -65,4 +65,4 @@ func main() {
 
 Apache 2.0 License
 
-Copyright © Infinite-Iroha & WJQSERVER. All rights reserved.
+Copyright © 2025 Infinite-Iroha & WJQSERVER. All rights reserved.
