@@ -2,7 +2,6 @@ package ikumi
 
 import (
 	"fmt"
-	"log"
 	"net/http"
 	"strconv"
 
@@ -110,15 +109,12 @@ func (s *memoryTokenLimiterStore) GetLimiter(key string, limit rate.Limit, burst
 // runCleanupLoop 是一个内部方法，在后台 goroutine 中定期调用 Cleanup。
 func (s *memoryTokenLimiterStore) runCleanupLoop() {
 	// 使用英文记录日志，说明清理任务已启动
-	log.Printf("toukautil.RateLimiter: Memory store cleanup goroutine started. Interval: %s, InactiveTimeout: %s", s.cleanupInterval, s.inactiveTimeout)
 	for {
 		select {
 		case <-s.cleanupTicker.C: // 等待定时器触发
 			s.Cleanup(s.inactiveTimeout)
 		case <-s.stopCleanupChan: // 收到停止信号
 			s.cleanupTicker.Stop() // 停止定时器
-			// 使用英文记录日志，说明清理任务已停止
-			log.Println("toukautil.RateLimiter: Memory store cleanup goroutine stopped.")
 			return
 		}
 	}
@@ -133,7 +129,6 @@ func (s *memoryTokenLimiterStore) Cleanup(inactiveDuration time.Duration) {
 	defer s.accessMu.Unlock()
 
 	// 使用英文记录日志，包含清理前的 Limiter 数量
-	// log.Printf("toukautil.RateLimiter: Running memory store cleanup. Limiters before: %d", len(s.limiters))
 	now := time.Now()
 	removedCount := 0
 	for key, lastAccessTime := range s.lastAccessed {
@@ -143,10 +138,6 @@ func (s *memoryTokenLimiterStore) Cleanup(inactiveDuration time.Duration) {
 			removedCount++
 		}
 	}
-	// if removedCount > 0 {
-	// 使用英文记录日志，包含清理后移除的 Limiter 数量和剩余数量
-	// log.Printf("toukautil.RateLimiter: Memory store cleanup finished. Removed: %d, Limiters after: %d", removedCount, len(s.limiters))
-	// }
 }
 
 // StopCleanup 停止后台的清理 goroutine。
@@ -261,7 +252,7 @@ func TokenRateLimit(opts TokenRateLimiterOptions) touka.HandlerFunc {
 	// 确保每次请求消耗的令牌数不超过突发容量，否则 AllowN 将永远失败
 	if opts.TokensPerRequest > opts.Burst {
 		// 使用英文记录警告日志
-		log.Printf("toukautil.TokenRateLimit: Warning - TokensPerRequest (%d) is greater than Burst (%d). Adjusting TokensPerRequest to Burst.", opts.TokensPerRequest, opts.Burst)
+		//log.Printf("toukautil.TokenRateLimit: Warning - TokensPerRequest (%d) is greater than Burst (%d). Adjusting TokensPerRequest to Burst.", opts.TokensPerRequest, opts.Burst)
 		opts.TokensPerRequest = opts.Burst
 	}
 
@@ -291,7 +282,8 @@ func TokenRateLimit(opts TokenRateLimiterOptions) touka.HandlerFunc {
 			// 在这种情况下，可以选择跳过限制并记录警告，或者应用一个全局的默认限制。
 			// 当前选择跳过并记录。
 			// 使用英文记录警告日志
-			log.Println("toukautil.TokenRateLimit: Warning - KeyFunc returned an empty string. Skipping rate limit for this request.")
+			//log.Println("toukautil.TokenRateLimit: Warning - KeyFunc returned an empty string. Skipping rate limit for this request.")
+			c.Warnf("toukautil.TokenRateLimit: Warning - KeyFunc returned an empty string. Skipping rate limit for this request.")
 			c.Next()
 			return
 		}
@@ -323,7 +315,8 @@ func TokenRateLimit(opts TokenRateLimiterOptions) touka.HandlerFunc {
 				// 如果 ReserveN 也返回 !OK，可能意味着请求的令牌数大于 Burst，
 				// 或者速率是 Inf。在这种情况下，拒绝是正确的，但 RetryAfter 可能不明确。
 				// 使用英文记录警告日志
-				log.Printf("toukautil.TokenRateLimit: Limiter.ReserveN indicated not OK for key '%s' after AllowN was false. This might indicate TokensPerRequest > Burst or infinite rate.", key)
+				//log.Printf("toukautil.TokenRateLimit: Limiter.ReserveN indicated not OK for key '%s' after AllowN was false. This might indicate TokensPerRequest > Burst or infinite rate.", key)
+				c.Warnf("toukautil.TokenRateLimit: Limiter.ReserveN indicated not OK for key '%s' after AllowN was false. This might indicate TokensPerRequest > Burst or infinite rate.", key)
 				opts.OnLimited(c, RateLimitInfo{
 					Key:            key,
 					LimitPerSecond: float64(opts.Limit),
