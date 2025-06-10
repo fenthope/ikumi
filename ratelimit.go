@@ -229,7 +229,7 @@ func defaultTokenOnLimited(c *touka.Context, info RateLimitInfo) {
 	c.SetHeader("X-RateLimit-Limit-Per-Second", fmt.Sprintf("%.2f", info.LimitPerSecond))
 	c.SetHeader("X-RateLimit-Burst-Capacity", strconv.Itoa(info.Burst))
 
-	c.ErrorUseHandle(http.StatusTooManyRequests)
+	c.ErrorUseHandle(http.StatusTooManyRequests, fmt.Errorf("Too Many Requests, Key '%s'", info.Key))
 	// 确保 Touka 处理链被中止
 	if !c.IsAborted() {
 		c.Abort()
