@@ -4,7 +4,7 @@ go 1.24.4
 
 require (
 	github.com/infinite-iroha/touka v0.3.3
-	golang.org/x/time v0.12.0
+	golang.org/x/time v0.14.0
 )
 
 require (
