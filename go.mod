@@ -1,10 +1,10 @@
 module github.com/fenthope/ikumi
 
-go 1.24.4
+go 1.25.0
 
 require (
 	github.com/infinite-iroha/touka v0.3.3
-	golang.org/x/time v0.12.0
+	golang.org/x/time v0.15.0
 )
 
 require (
