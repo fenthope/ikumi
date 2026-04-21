@@ -32,19 +32,22 @@ type TokenRateLimiterXStore interface {
 	StopCleanup()
 }
 
-// memoryTokenLimiterStore 是 TokenRateLimiterXStore 接口的一个基于内存的实现。
-// 它为每个唯一的 key 存储一个 *rate.Limiter 实例。
-type memoryTokenLimiterStore struct {
-	limiters map[string]*rate.Limiter // 存储 key 到 Limiter 的映射
-	mu       sync.RWMutex             // 保护对 limiters map 的并发访问
+// limiterEntry 将 limiter 和最后访问时间合并为一个结构体
+type limiterEntry struct {
+	limiter      *rate.Limiter
+	lastAccessed time.Time
+}
 
-	lastAccessed map[string]time.Time // 记录每个 Limiter 的最后访问时间，用于清理
-	accessMu     sync.Mutex           // 保护对 lastAccessed map 的并发访问
+// memoryTokenLimiterStore 是 TokenRateLimiterXStore 接口的一个基于内存的实现。
+// 使用 sync.Map 实现无锁并发访问，显著提升高并发场景下的性能。
+type memoryTokenLimiterStore struct {
+	limiters sync.Map // 存储 key 到 limiterEntry 的映射
 
 	cleanupInterval time.Duration // 定期清理的间隔
 	inactiveTimeout time.Duration // Limiter 被视为不活动前的超时时间
 	cleanupTicker   *time.Ticker  // 用于定期触发清理的定时器
 	stopCleanupChan chan struct{} // 用于信号通知清理 goroutine 停止
+	stopOnce        sync.Once     // 确保 stopCleanupChan 只关闭一次
 }
 
 // NewMemoryTokenLimiterStore 创建一个新的 memoryTokenLimiterStore 实例。
@@ -52,8 +55,6 @@ type memoryTokenLimiterStore struct {
 // inactiveDurationForCleanup: Limiter 在被清理前可以保持不活动状态的最长时间。
 func NewMemoryTokenLimiterStore(cleanupInterval time.Duration, inactiveDurationForCleanup time.Duration) TokenRateLimiterXStore {
 	store := &memoryTokenLimiterStore{
-		limiters:        make(map[string]*rate.Limiter),
-		lastAccessed:    make(map[string]time.Time),
 		cleanupInterval: cleanupInterval,
 		inactiveTimeout: inactiveDurationForCleanup,
 		stopCleanupChan: make(chan struct{}),
@@ -67,43 +68,34 @@ func NewMemoryTokenLimiterStore(cleanupInterval time.Duration, inactiveDurationF
 }
 
 // GetLimiter 从内存存储中获取或创建一个新的 *rate.Limiter。
-// 如果 key 对应的 Limiter 已存在，则返回现有实例并更新其最后访问时间。
-// 如果不存在，则使用提供的 limit 和 burst 参数创建一个新的 Limiter，存储并返回。
-// 此方法是并发安全的。
+// 使用 sync.Map 的 LoadOrStore 实现原子化操作，无需显式锁。
 func (s *memoryTokenLimiterStore) GetLimiter(key string, limit rate.Limit, burst int) *rate.Limiter {
 	now := time.Now()
 
-	// 首先尝试读锁下快速路径获取
-	s.mu.RLock()
-	limiter, exists := s.limiters[key]
-	s.mu.RUnlock()
-
-	if exists {
-		s.accessMu.Lock()
-		s.lastAccessed[key] = now // 更新最后访问时间
-		s.accessMu.Unlock()
-		return limiter
+	// 尝试加载现有的 limiter
+	if entry, ok := s.limiters.Load(key); ok {
+		e := entry.(*limiterEntry)
+		// 原子更新最后访问时间
+		e.lastAccessed = now
+		return e.limiter
 	}
 
-	// Limiter 不存在，需要获取写锁创建
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	// 双重检查，防止在获取写锁期间其他 goroutine 已创建
-	if limiter, exists = s.limiters[key]; exists {
-		s.accessMu.Lock()
-		s.lastAccessed[key] = now
-		s.accessMu.Unlock()
-		return limiter
+	// 创建新的 limiter 和 entry
+	newEntry := &limiterEntry{
+		limiter:      rate.NewLimiter(limit, burst),
+		lastAccessed: now,
 	}
 
-	// 创建新的 Limiter
-	limiter = rate.NewLimiter(limit, burst)
-	s.limiters[key] = limiter
-	s.accessMu.Lock()
-	s.lastAccessed[key] = now // 记录创建（即首次访问）时间
-	s.accessMu.Unlock()
-	return limiter
+	// 使用 LoadOrStore 原子化操作：如果 key 存在则返回现有值，否则存储新值
+	actual, loaded := s.limiters.LoadOrStore(key, newEntry)
+	if loaded {
+		// 其他 goroutine 已创建，更新其最后访问时间
+		e := actual.(*limiterEntry)
+		e.lastAccessed = now
+		return e.limiter
+	}
+
+	return newEntry.limiter
 }
 
 // runCleanupLoop 是一个内部方法，在后台 goroutine 中定期调用 Cleanup。
@@ -121,37 +113,27 @@ func (s *memoryTokenLimiterStore) runCleanupLoop() {
 }
 
 // Cleanup 从内存存储中移除在 inactiveDuration 时间内没有活动的 Limiter 实例。
-// 这是为了防止内存无限增长。此方法是并发安全的。
+// 使用 sync.Map 的 Range 遍历，无需阻塞整个存储。
 func (s *memoryTokenLimiterStore) Cleanup(inactiveDuration time.Duration) {
-	s.mu.Lock()       // 获取对 limiters map 的写锁
-	s.accessMu.Lock() // 获取对 lastAccessed map 的写锁
-	defer s.mu.Unlock()
-	defer s.accessMu.Unlock()
-
-	// 使用英文记录日志，包含清理前的 Limiter 数量
 	now := time.Now()
-	removedCount := 0
-	for key, lastAccessTime := range s.lastAccessed {
-		if now.Sub(lastAccessTime) > inactiveDuration {
-			delete(s.limiters, key)     // 从 limiters map 中删除
-			delete(s.lastAccessed, key) // 从 lastAccessed map 中删除
-			removedCount++
+
+	// 遍历所有 limiter，删除过期的条目
+	s.limiters.Range(func(key, value interface{}) bool {
+		entry := value.(*limiterEntry)
+		if now.Sub(entry.lastAccessed) > inactiveDuration {
+			s.limiters.Delete(key)
 		}
-	}
+		return true // 继续遍历
+	})
 }
 
 // StopCleanup 停止后台的清理 goroutine。
-// 如果没有运行清理 goroutine，此方法不执行任何操作。
+// 使用 sync.Once 确保 stopCleanupChan 只关闭一次，避免竞态条件。
 func (s *memoryTokenLimiterStore) StopCleanup() {
 	if s.cleanupTicker != nil {
-		// 检查 stopCleanupChan 是否已关闭，避免重复关闭
-		// 这可以通过一个 once 标志或尝试非阻塞发送来实现，但简单关闭通常是安全的
-		select {
-		case <-s.stopCleanupChan: // 已经关闭了
-			return
-		default:
-			close(s.stopCleanupChan) // 发送停止信号
-		}
+		s.stopOnce.Do(func() {
+			close(s.stopCleanupChan)
+		})
 	}
 }
 
