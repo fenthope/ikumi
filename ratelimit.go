@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"sync/atomic"
 
 	"math"
 
@@ -33,9 +34,10 @@ type TokenRateLimiterXStore interface {
 }
 
 // limiterEntry 将 limiter 和最后访问时间合并为一个结构体
+// 使用 atomic.Int64 存储 Unix 时间戳，确保并发安全
 type limiterEntry struct {
 	limiter      *rate.Limiter
-	lastAccessed time.Time
+	lastAccessed atomic.Int64 // Unix 时间戳 (秒)
 }
 
 // memoryTokenLimiterStore 是 TokenRateLimiterXStore 接口的一个基于内存的实现。
@@ -70,28 +72,28 @@ func NewMemoryTokenLimiterStore(cleanupInterval time.Duration, inactiveDurationF
 // GetLimiter 从内存存储中获取或创建一个新的 *rate.Limiter。
 // 使用 sync.Map 的 LoadOrStore 实现原子化操作，无需显式锁。
 func (s *memoryTokenLimiterStore) GetLimiter(key string, limit rate.Limit, burst int) *rate.Limiter {
-	now := time.Now()
+	nowUnix := time.Now().Unix()
 
 	// 尝试加载现有的 limiter
 	if entry, ok := s.limiters.Load(key); ok {
 		e := entry.(*limiterEntry)
 		// 原子更新最后访问时间
-		e.lastAccessed = now
+		e.lastAccessed.Store(nowUnix)
 		return e.limiter
 	}
 
 	// 创建新的 limiter 和 entry
 	newEntry := &limiterEntry{
-		limiter:      rate.NewLimiter(limit, burst),
-		lastAccessed: now,
+		limiter: rate.NewLimiter(limit, burst),
 	}
+	newEntry.lastAccessed.Store(nowUnix)
 
 	// 使用 LoadOrStore 原子化操作：如果 key 存在则返回现有值，否则存储新值
 	actual, loaded := s.limiters.LoadOrStore(key, newEntry)
 	if loaded {
 		// 其他 goroutine 已创建，更新其最后访问时间
 		e := actual.(*limiterEntry)
-		e.lastAccessed = now
+		e.lastAccessed.Store(nowUnix)
 		return e.limiter
 	}
 
@@ -115,12 +117,14 @@ func (s *memoryTokenLimiterStore) runCleanupLoop() {
 // Cleanup 从内存存储中移除在 inactiveDuration 时间内没有活动的 Limiter 实例。
 // 使用 sync.Map 的 Range 遍历，无需阻塞整个存储。
 func (s *memoryTokenLimiterStore) Cleanup(inactiveDuration time.Duration) {
-	now := time.Now()
+	nowUnix := time.Now().Unix()
+	inactiveSeconds := int64(inactiveDuration.Seconds())
 
 	// 遍历所有 limiter，删除过期的条目
 	s.limiters.Range(func(key, value interface{}) bool {
 		entry := value.(*limiterEntry)
-		if now.Sub(entry.lastAccessed) > inactiveDuration {
+		lastAccess := entry.lastAccessed.Load()
+		if nowUnix-lastAccess > inactiveSeconds {
 			s.limiters.Delete(key)
 		}
 		return true // 继续遍历

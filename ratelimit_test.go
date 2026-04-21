@@ -76,14 +76,18 @@ func TestMemoryTokenLimiterStore_Cleanup(t *testing.T) {
 
 	// 手动添加一些 entries
 	now := time.Now()
-	store.limiters.Store("active", &limiterEntry{
-		limiter:      rate.NewLimiter(10, 20),
-		lastAccessed: now,
-	})
-	store.limiters.Store("inactive", &limiterEntry{
-		limiter:      rate.NewLimiter(10, 20),
-		lastAccessed: now.Add(-20 * time.Minute), // 20 分钟前访问
-	})
+
+	activeEntry := &limiterEntry{
+		limiter: rate.NewLimiter(10, 20),
+	}
+	activeEntry.lastAccessed.Store(now.Unix())
+	store.limiters.Store("active", activeEntry)
+
+	inactiveEntry := &limiterEntry{
+		limiter: rate.NewLimiter(10, 20),
+	}
+	inactiveEntry.lastAccessed.Store(now.Add(-20 * time.Minute).Unix()) // 20 分钟前访问
+	store.limiters.Store("inactive", inactiveEntry)
 
 	// 执行清理，移除超过 15 分钟不活动的 entries
 	store.Cleanup(15 * time.Minute)
