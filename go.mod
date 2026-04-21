@@ -3,7 +3,7 @@ module github.com/fenthope/ikumi
 go 1.26
 
 require (
-	github.com/infinite-iroha/touka v0.5.1-0.20260409232140-271e54eb4d44
+	github.com/infinite-iroha/touka v0.5.1
 	golang.org/x/time v0.15.0
 )
 
@@ -15,5 +15,4 @@ require (
 	github.com/go-json-experiment/json v0.0.0-20260214004413-d219187c3433 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	golang.org/x/net v0.53.0 // indirect
-	golang.org/x/text v0.36.0 // indirect
 )
