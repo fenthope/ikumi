@@ -80,13 +80,13 @@ func TestMemoryTokenLimiterStore_Cleanup(t *testing.T) {
 	activeEntry := &limiterEntry{
 		limiter: rate.NewLimiter(10, 20),
 	}
-	activeEntry.lastAccessed.Store(now.Unix())
+	activeEntry.lastAccessed.Store(now.UnixNano())
 	store.limiters.Store("active", activeEntry)
 
 	inactiveEntry := &limiterEntry{
 		limiter: rate.NewLimiter(10, 20),
 	}
-	inactiveEntry.lastAccessed.Store(now.Add(-20 * time.Minute).Unix()) // 20 分钟前访问
+	inactiveEntry.lastAccessed.Store(now.Add(-20 * time.Minute).UnixNano()) // 20 分钟前访问
 	store.limiters.Store("inactive", inactiveEntry)
 
 	// 执行清理，移除超过 15 分钟不活动的 entries
@@ -100,6 +100,30 @@ func TestMemoryTokenLimiterStore_Cleanup(t *testing.T) {
 	// 验证 inactive entry 已被移除
 	if _, ok := store.limiters.Load("inactive"); ok {
 		t.Error("inactive entry should be cleaned up")
+	}
+}
+
+func TestMemoryTokenLimiterStore_Cleanup_NonPositiveDuration(t *testing.T) {
+	store := &memoryTokenLimiterStore{
+		stopCleanupChan: make(chan struct{}),
+	}
+
+	// 添加 entry
+	entry := &limiterEntry{
+		limiter: rate.NewLimiter(10, 20),
+	}
+	entry.lastAccessed.Store(time.Now().UnixNano())
+	store.limiters.Store("key", entry)
+
+	// 非正 duration 不应清理任何 entry
+	store.Cleanup(0)
+	if _, ok := store.limiters.Load("key"); !ok {
+		t.Error("entry should not be cleaned up with zero duration")
+	}
+
+	store.Cleanup(-1 * time.Minute)
+	if _, ok := store.limiters.Load("key"); !ok {
+		t.Error("entry should not be cleaned up with negative duration")
 	}
 }
 
