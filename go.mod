@@ -3,7 +3,7 @@ module github.com/fenthope/ikumi
 go 1.26
 
 require (
-	github.com/infinite-iroha/touka v0.5.1-0.20260409232140-271e54eb4d44
+	github.com/infinite-iroha/touka v1.0.0
 	golang.org/x/time v0.15.0
 )
 
